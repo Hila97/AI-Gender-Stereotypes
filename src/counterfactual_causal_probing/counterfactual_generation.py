@@ -50,7 +50,61 @@ direct_swaps = {
     "niece": "nephew", 
     "nephew": "niece",
     "grandmother": "grandfather", 
-    "grandfather": "grandmother"
+    "grandfather": "grandmother",
+
+    # extended lexicon (not in the original gender lexicons)
+    # titles: Mr. -> Ms. (neutral form), Mrs./Ms. -> Mr.
+    "mr.": "ms.",
+    "mr": "ms",
+    "mrs.": "mr.",
+    "mrs": "mr",
+    "ms.": "mr.",
+    "ms": "mr",
+    "sir": "madam",
+    "madam": "sir",
+    "ma'am": "sir",
+
+    "girlfriend": "boyfriend", 
+    "boyfriend": "girlfriend",
+    "girlfriends": "boyfriends", 
+    "boyfriends": "girlfriends",
+    "fiancee": "fiance", 
+    "fiance": "fiancee",
+    "bride": "groom", 
+    "groom": "bride",
+
+    "mothers": "fathers", 
+    "fathers": "mothers",
+    "moms": "dads", 
+    "dads": "moms",
+    "mum": "dad",
+    "mommy": "daddy", 
+    "daddy": "mommy",
+    "daughters": "sons", 
+    "sons": "daughters",
+    "sisters": "brothers", 
+    "brothers": "sisters",
+    "wives": "husbands", 
+    "husbands": "wives",
+    "aunts": "uncles", 
+    "uncles": "aunts",
+    "nieces": "nephews", 
+    "nephews": "nieces",
+    "grandma": "grandpa", 
+    "grandpa": "grandma",
+    "granddaughter": "grandson", 
+    "grandson": "granddaughter",
+    "stepmother": "stepfather", 
+    "stepfather": "stepmother",
+
+    "queen": "king", 
+    "king": "queen",
+    "princess": "prince", 
+    "prince": "princess",
+    "actress": "actor",
+    "waitress": "waiter",
+    "sis": "bro", 
+    "bro": "sis"
 }
 
 
@@ -80,6 +134,10 @@ def swap_gender(text):
                 new_word = "her"  # "his car" -> "her car"
             else:
                 new_word = "hers" # "the car is his," -> "the car is hers,"
+
+        # "Miss" as a title ("Miss Lee") vs. the verb ("I miss her")
+        elif word_lower == "miss":
+            new_word = "mr" if token.pos_ == "PROPN" else token.text
 
         # basic lexicon
         elif word_lower in direct_swaps:
