@@ -333,6 +333,120 @@ def analyze_2b(scores, texts=None, vader=None, n_examples=5):
     return r
 
 
+# ---------------------------------------------------------------- 2c: embedding position
+
+def analyze_2c(shifts, texts=None, n_examples=5):
+    """
+    shifts: output of cf_embedding.py (counterfactual/cf_embedding_shifts.pkl)
+    delta_* = cosine distance between original and swapped embedding (HOW MUCH the post moved)
+    proj_*  = position on the Soft -> Hard axis (WHERE the post moved)
+    """
+    r = {}
+    print("=" * 60)
+    print("  2c. Effect of the gender swap on embedding position")
+    print("=" * 60)
+
+    n_all = len(shifts)
+    df = shifts[~shifts["cf_truncated_same"].astype(bool)].copy()
+    r["n_pairs_total"], r["n_pairs"] = n_all, len(df)
+    r["n_pairs_truncated_removed"] = int(n_all - len(df))
+    print(f"Pairs: {n_all}, removed (swap after token 512): {n_all - len(df)}, analysed: {len(df)}")
+
+    # the Hard-Soft gap is used as a unit, so a shift can be read as "% of the way from Soft to Hard"
+    hard_c = df.loc[df["ai_category"] == "hard_ai", "proj_orig"].mean()
+    soft_c = df.loc[df["ai_category"] == "soft_ai", "proj_orig"].mean()
+    gap = hard_c - soft_c
+    r["axis"] = {"hard_mean": float(hard_c), "soft_mean": float(soft_c), "gap": float(gap)}
+    df["dProj"] = (df["proj_cf"] - df["proj_orig"]) / gap      # > 0 : moved towards Hard AI
+    print(f"Axis check: Hard posts at {hard_c:.3f}, Soft posts at {soft_c:.3f} (gap {gap:.3f}). "
+          f"Shifts below are in % of this gap.")
+
+    # --- 1. how much the post moves
+    d = df["delta_gender"]
+    r["delta_gender"] = {"mean": float(d.mean()), "median": float(d.median())}
+    print(f"\n[delta = cosine distance orig vs swapped] mean {d.mean():.5f}, median {d.median():.5f}")
+
+    print("\n[delta by number of gender swaps]")
+    bins = pd.cut(df["n_swaps"], [0, 1, 3, 10, np.inf], labels=["1", "2-3", "4-10", ">10"])
+    by_n = df.groupby(bins, observed=True).agg(n=("delta_gender", "size"), mean_delta=("delta_gender", "mean"))
+    r["by_n_swaps"] = by_n.reset_index().astype({"n_swaps": str}).to_dict("records")
+    print(by_n.round(5).to_string())
+    rho = stats.spearmanr(df["n_swaps"], df["delta_gender"])
+    r["n_swaps_spearman"] = {"rho": float(rho.statistic), "p": float(rho.pvalue)}
+    print(f"   Spearman(n_swaps, delta): rho = {rho.statistic:.3f}, p = {fmt_p(rho.pvalue)}")
+
+    # --- 2. H2c: gender swaps move the embedding more than control swaps (same posts)
+    sub = df[df["has_control"].astype(bool) & df["ctrl_truncated_same"].eq(False)].copy()
+    print("\n[H2c: delta gender vs delta control]  (same posts)")
+    r["H2c"] = {}
+    for name, s in [("all posts with control", sub),
+                    ("same n of swaps", sub[sub["n_ctrl_swaps"] == sub["n_swaps"]])]:
+        if len(s) < 2:
+            continue
+        res = paired_test(s["delta_gender"] - s["delta_ctrl"])   # > 0 : gender moves the post more
+        res.update({"mean_delta_gender": float(s["delta_gender"].mean()),
+                    "mean_delta_control": float(s["delta_ctrl"].mean()),
+                    "ratio": float(s["delta_gender"].mean() / s["delta_ctrl"].mean())})
+        r["H2c"][name] = res
+        print(f"   {name:24s} n={res['n']:6d}  delta gender {res['mean_delta_gender']:.5f} vs control "
+              f"{res['mean_delta_control']:.5f} (x{res['ratio']:.1f})  Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  "
+              f"d = {res['cohens_d']:+.3f}")
+
+    # --- 3. direction on the Hard/Soft axis
+    print("\n[Shift on the Soft->Hard axis by swap direction]  (positive = towards Hard AI, % of gap)")
+    r["dProj_by_direction"] = {}
+    for ctx, name in DIRECTION.items():
+        s = df[df["gender_context"] == ctx]
+        if len(s) < 2:
+            continue
+        res = paired_test(s["dProj"])
+        r["dProj_by_direction"][name] = res
+        print(f"   {name:15s} n={res['n']:6d}  mean {res['mean']:+.3%}  "
+              f"Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+    m2f = df.loc[df["gender_context"] == "male", "dProj"]
+    f2m = df.loc[df["gender_context"] == "female", "dProj"]
+    if len(m2f) > 1 and len(f2m) > 1:
+        r["direction_mannwhitney_p"] = float(stats.mannwhitneyu(m2f, f2m).pvalue)
+        print(f"   male->female vs female->male (Mann-Whitney): p = {fmt_p(r['direction_mannwhitney_p'])}")
+
+    # masculinization effect: both directions on one scale.
+    # dProj_masc = shift towards Hard AI when the post becomes MORE male
+    # (female->male: dProj, male->female: -dProj). Stereotype "male = Hard AI" -> dProj_masc > 0.
+    one_dir = df[df["gender_context"].isin(["male", "female"])].copy()
+    one_dir["dProj_masc"] = np.where(one_dir["gender_context"] == "female", one_dir["dProj"], -one_dir["dProj"])
+    print("\n[Masculinization effect]  shift towards Hard AI when the post becomes more male")
+    r["dProj_masc"] = {}
+    for cat, s in [("all", one_dir)] + [(c, one_dir[one_dir["ai_category"] == c]) for c in ["hard_ai", "soft_ai", "general"]]:
+        if len(s) < 2:
+            continue
+        res = paired_test(s["dProj_masc"])
+        r["dProj_masc"][cat] = res
+        print(f"   {cat:8s} n={res['n']:6d}  mean {res['mean']:+.3%}  "
+              f"Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+
+    # control: does a random word swap also push posts along the axis?
+    sub["dProj_ctrl"] = (sub["proj_ctrl"] - sub["proj_orig"]) / gap
+    res = paired_test(sub["dProj"].abs() - sub["dProj_ctrl"].abs())
+    res.update({"mean_abs_dProj_gender": float(sub["dProj"].abs().mean()),
+                "mean_abs_dProj_control": float(sub["dProj_ctrl"].abs().mean())})
+    r["dProj_gender_vs_control"] = res
+    print(f"\n[|axis shift| gender vs control] n={res['n']}  {res['mean_abs_dProj_gender']:.3%} vs "
+          f"{res['mean_abs_dProj_control']:.3%}  Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+
+    # --- 4. examples: largest moves on the axis
+    if texts is not None:
+        top = df.reindex(df["dProj"].abs().sort_values(ascending=False).index).head(n_examples)
+        ex = top.merge(texts[["id", "full_text", "text_cf"]], on="id", how="left")
+        print(f"\n[Largest shifts on the Soft->Hard axis] (top {len(ex)})")
+        for _, row in ex.iterrows():
+            print(f"- shift {row['dProj']:+.1%} of gap | delta {row['delta_gender']:.4f} | "
+                  f"{DIRECTION.get(row['gender_context'], row['gender_context'])} | {row['ai_category']} | n_swaps={row['n_swaps']}")
+            for o, c in changed_sentences(str(row["full_text"]), str(row["text_cf"]))[:2]:
+                print(f"  ORIG: {o[:300]}")
+                print(f"  CF:   {c[:300]}")
+    return r
+
+
 # ---------------------------------------------------------------- run
 
 def main_2a():
@@ -355,6 +469,18 @@ def main_2b():
     results = analyze_2b(scores, texts, vader)
 
     out_path = os.path.join(CF_DIR, "cf_2b_results.json")
+    with open(out_path, "w") as f:
+        json.dump(results, f, indent=2, default=float)
+    print(f"\nSaved to {out_path}")
+    return results
+
+
+def main_2c():
+    shifts = pd.read_pickle(os.path.join(CF_DIR, "cf_embedding_shifts.pkl"))
+    texts = pd.read_pickle(os.path.join(CF_DIR, "counterfactual_posts_checked.pkl"))
+    results = analyze_2c(shifts, texts)
+
+    out_path = os.path.join(CF_DIR, "cf_2c_results.json")
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2, default=float)
     print(f"\nSaved to {out_path}")
