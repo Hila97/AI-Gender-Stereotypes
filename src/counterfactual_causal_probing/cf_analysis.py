@@ -447,6 +447,63 @@ def analyze_2c(shifts, texts=None, n_examples=5):
     return r
 
 
+def axis_check_2c(shifts, e_orig, e_cf):
+    """
+    Sensitivity check for the Soft->Hard axis.
+    Problem: the axis is (mean of Hard posts) - (mean of Soft posts). If Hard posts contain more
+    male words than Soft posts, the axis partly points in the "male" direction, and a gender swap
+    would move posts along it just because of that (data composition, not a stereotype in BERT).
+    Fix: a gender-balanced axis, built separately inside male posts and inside female posts:
+        axis = average of (Hard_male - Soft_male) and (Hard_female - Soft_female)
+    If the masculinization effect stays with this axis, it is not an artifact of the composition.
+    e_orig, e_cf: the saved embeddings (cf_embeddings_orig.npy / _cf.npy), same row order as shifts.
+    """
+    r = {}
+    e_orig = e_orig.astype(np.float32)
+    e_cf = e_cf.astype(np.float32)
+    cat = shifts["ai_category"].values
+    ctx = shifts["gender_context"].values
+    valid = ~shifts["cf_truncated_same"].astype(bool).values
+
+    def unit(v):
+        return v / np.linalg.norm(v)
+
+    def centroid(mask):
+        return e_orig[mask].mean(0)
+
+    axis_orig = unit(centroid(cat == "hard_ai") - centroid(cat == "soft_ai"))
+    parts = [centroid((cat == "hard_ai") & (ctx == g)) - centroid((cat == "soft_ai") & (ctx == g))
+             for g in ["male", "female"]]
+    axis_bal = unit(np.mean(parts, axis=0))
+    gender_dir = unit(centroid(ctx == "male") - centroid(ctx == "female"))
+
+    print("=" * 60)
+    print("  2c. Axis sensitivity check (gender-balanced Soft->Hard axis)")
+    print("=" * 60)
+    r["cos_axis_orig_vs_gender"] = float(axis_orig @ gender_dir)
+    r["cos_axis_balanced_vs_gender"] = float(axis_bal @ gender_dir)
+    r["cos_axis_orig_vs_balanced"] = float(axis_orig @ axis_bal)
+    print(f"cos(original axis, male-female direction) = {r['cos_axis_orig_vs_gender']:+.3f}")
+    print(f"cos(balanced axis, male-female direction) = {r['cos_axis_balanced_vs_gender']:+.3f}")
+    print(f"cos(original axis, balanced axis)         = {r['cos_axis_orig_vs_balanced']:+.3f}")
+
+    for name, axis in [("original axis", axis_orig), ("balanced axis", axis_bal)]:
+        p_o, p_c = e_orig @ axis, e_cf @ axis
+        gap = p_o[cat == "hard_ai"].mean() - p_o[cat == "soft_ai"].mean()
+        d_proj = (p_c - p_o) / gap
+        # more male -> positive (female->male as is, male->female flipped)
+        masc = np.where(ctx == "female", d_proj, -d_proj)
+        print(f"\n[{name}] Hard-Soft gap {gap:.3f}")
+        r[name] = {"gap": float(gap)}
+        for c in ["all", "hard_ai", "soft_ai", "general"]:
+            m = valid & np.isin(ctx, ["male", "female"]) & ((cat == c) if c != "all" else True)
+            res = paired_test(masc[m])
+            r[name][c] = res
+            print(f"   masculinization {c:8s} n={res['n']:6d}  mean {res['mean']:+.3%}  "
+                  f"Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+    return r
+
+
 # ---------------------------------------------------------------- run
 
 def main_2a():
@@ -481,6 +538,19 @@ def main_2c():
     results = analyze_2c(shifts, texts)
 
     out_path = os.path.join(CF_DIR, "cf_2c_results.json")
+    with open(out_path, "w") as f:
+        json.dump(results, f, indent=2, default=float)
+    print(f"\nSaved to {out_path}")
+    return results
+
+
+def main_2c_axis_check():
+    shifts = pd.read_pickle(os.path.join(CF_DIR, "cf_embedding_shifts.pkl"))
+    e_orig = np.load(os.path.join(CF_DIR, "cf_embeddings_orig.npy"))
+    e_cf = np.load(os.path.join(CF_DIR, "cf_embeddings_cf.npy"))
+    results = axis_check_2c(shifts, e_orig, e_cf)
+
+    out_path = os.path.join(CF_DIR, "cf_2c_axis_check.json")
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2, default=float)
     print(f"\nSaved to {out_path}")
