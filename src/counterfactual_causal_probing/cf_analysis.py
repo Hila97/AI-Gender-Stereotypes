@@ -200,6 +200,139 @@ def compare_with_control(df):
     return r
 
 
+# ---------------------------------------------------------------- 2b: sentiment
+
+DIRECTION = {"male": "male->female", "female": "female->male", "both": "both (mixed)"}
+
+
+def analyze_2b(scores, texts=None, vader=None, n_examples=5):
+    """
+    scores: output of cf_sentiment.py (counterfactual/cf_sentiment_scores.pkl)
+    texts:  optional df with id, full_text, text_cf to print the largest shifts
+    vader:  optional output of vader_sanity_check (counterfactual/cf_vader_sanity.pkl)
+    """
+    r = {}
+    print("=" * 60)
+    print("  2b. Effect of the gender swap on sentiment")
+    print("=" * 60)
+
+    # --- 0. VADER: why a contextual model is needed
+    if vader is not None:
+        r["vader"] = {"n": len(vader), "share_dS_zero": float((vader["dS_vader"] == 0).mean()),
+                      "mean_abs_dS": float(vader["dS_vader"].abs().mean())}
+        print(f"[VADER sanity check] dS = 0 in {r['vader']['share_dS_zero']:.1%} of {len(vader)} sampled pairs "
+              f"-> VADER cannot measure the effect, using RoBERTa instead")
+
+    n_all = len(scores)
+    df = scores[~scores["cf_truncated_same"].astype(bool)].copy()
+    df["dS_cf"] = df["S_cf"] - df["S_orig"]        # > 0 : the swapped post is more positive
+    r["n_pairs_total"], r["n_pairs"] = n_all, len(df)
+    r["n_pairs_truncated_removed"] = int(n_all - len(df))
+    print(f"\nPairs: {n_all}, removed (swap after token 512): {n_all - len(df)}, analysed: {len(df)}")
+
+    # --- 1. overall shift
+    r["dS_all"] = paired_test(df["dS_cf"])
+    d = r["dS_all"]
+    r["mean_abs_dS"] = float(df["dS_cf"].abs().mean())
+    r["share_abs_dS_gt_0.1"] = float((df["dS_cf"].abs() > 0.1).mean())
+    print(f"\n[dS = S(cf) - S(orig)] mean {d['mean']:+.4f}, median {d['median']:+.4f}, "
+          f"mean |dS| {r['mean_abs_dS']:.4f}, |dS| > 0.1 in {r['share_abs_dS_gt_0.1']:.1%} of pairs")
+    print(f"   Wilcoxon p = {fmt_p(d['wilcoxon_p'])}, Cohen's d = {d['cohens_d']:+.3f}")
+
+    # --- 2. by swap direction
+    print("\n[dS by swap direction]  (positive = more positive after the swap)")
+    r["dS_by_direction"] = {}
+    for ctx, name in DIRECTION.items():
+        sub = df[df["gender_context"] == ctx]
+        if len(sub) < 2:
+            continue
+        res = paired_test(sub["dS_cf"])
+        r["dS_by_direction"][name] = res
+        print(f"   {name:15s} n={res['n']:6d}  mean {res['mean']:+.4f}  "
+              f"Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+    m2f = df.loc[df["gender_context"] == "male", "dS_cf"]
+    f2m = df.loc[df["gender_context"] == "female", "dS_cf"]
+    if len(m2f) > 1 and len(f2m) > 1:
+        r["direction_mannwhitney_p"] = float(stats.mannwhitneyu(m2f, f2m).pvalue)
+        print(f"   male->female vs female->male (Mann-Whitney): p = {fmt_p(r['direction_mannwhitney_p'])}")
+
+    # --- 3. H2b: male->female in Hard AI posts increases sentiment (benevolence paradox),
+    #            smaller or absent in Soft AI posts
+    print("\n[H2b: dS by direction x AI category]")
+    r["dS_by_direction_category"] = {}
+    for ctx in ["male", "female"]:
+        for cat in ["hard_ai", "soft_ai", "general"]:
+            sub = df[(df["gender_context"] == ctx) & (df["ai_category"] == cat)]
+            if len(sub) < 2:
+                continue
+            res = paired_test(sub["dS_cf"])
+            key = f"{DIRECTION[ctx]} | {cat}"
+            r["dS_by_direction_category"][key] = res
+            print(f"   {key:26s} n={res['n']:6d}  mean {res['mean']:+.4f}  "
+                  f"Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+
+    hard = df.loc[(df["gender_context"] == "male") & (df["ai_category"] == "hard_ai"), "dS_cf"]
+    soft = df.loc[(df["gender_context"] == "male") & (df["ai_category"] == "soft_ai"), "dS_cf"]
+    if len(hard) > 1 and len(soft) > 1:
+        r["H2b_hard_vs_soft_mannwhitney_p"] = float(stats.mannwhitneyu(hard, soft).pvalue)
+        print(f"   male->female: Hard AI vs Soft AI (Mann-Whitney): p = {fmt_p(r['H2b_hard_vs_soft_mannwhitney_p'])}")
+
+    # --- 4. feminization effect: both directions on one scale.
+    # dS_fem = change in sentiment when the post becomes MORE female
+    # (male->female: dS, female->male: -dS). Benevolence paradox -> dS_fem > 0.
+    one_dir = df[df["gender_context"].isin(["male", "female"])].copy()
+    one_dir["dS_fem"] = np.where(one_dir["gender_context"] == "male", one_dir["dS_cf"], -one_dir["dS_cf"])
+    print("\n[Feminization effect]  dS_fem = sentiment change when the post becomes more female")
+    r["dS_fem"] = {}
+    for cat, s in [("all", one_dir)] + [(c, one_dir[one_dir["ai_category"] == c]) for c in ["hard_ai", "soft_ai", "general"]]:
+        if len(s) < 2:
+            continue
+        res = paired_test(s["dS_fem"])
+        r["dS_fem"][cat] = res
+        print(f"   {cat:8s} n={res['n']:6d}  mean {res['mean']:+.4f}  "
+              f"Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+
+    # --- 5. by number of swaps
+    print("\n[|dS| by number of gender swaps]")
+    bins = pd.cut(df["n_swaps"], [0, 1, 3, 10, np.inf], labels=["1", "2-3", "4-10", ">10"])
+    by_n = df.groupby(bins, observed=True).agg(n=("dS_cf", "size"),
+                                               mean_abs_dS=("dS_cf", lambda x: x.abs().mean()))
+    r["by_n_swaps"] = by_n.reset_index().astype({"n_swaps": str}).to_dict("records")
+    print(by_n.round(4).to_string())
+    rho = stats.spearmanr(df["n_swaps"], df["dS_cf"].abs())
+    r["n_swaps_spearman"] = {"rho": float(rho.statistic), "p": float(rho.pvalue)}
+    print(f"   Spearman(n_swaps, |dS|): rho = {rho.statistic:.3f}, p = {fmt_p(rho.pvalue)}")
+
+    # --- 6. gender vs control (step 24a)
+    sub = df[df["has_control"].astype(bool) & df["ctrl_truncated_same"].eq(False)].copy()
+    sub["dS_ctrl"] = sub["S_ctrl"] - sub["S_orig"]
+    print("\n[Gender vs control]  (same posts; |dS| = size of the change, ignoring direction)")
+    r["gender_vs_control"] = {}
+    for name, s in [("all posts with control", sub),
+                    ("same n of swaps", sub[sub["n_ctrl_swaps"] == sub["n_swaps"]])]:
+        if len(s) < 2:
+            continue
+        res = paired_test(s["dS_cf"].abs() - s["dS_ctrl"].abs())   # > 0 : gender swap moves sentiment more
+        res.update({"mean_abs_dS_gender": float(s["dS_cf"].abs().mean()),
+                    "mean_abs_dS_control": float(s["dS_ctrl"].abs().mean())})
+        r["gender_vs_control"][name] = res
+        print(f"   {name:24s} n={res['n']:6d}  |dS| gender {res['mean_abs_dS_gender']:.4f} vs control "
+              f"{res['mean_abs_dS_control']:.4f}  Wilcoxon p = {fmt_p(res['wilcoxon_p'])}  d = {res['cohens_d']:+.3f}")
+
+    # --- 7. largest shifts (qualitative examples)
+    if texts is not None:
+        top = df.reindex(df["dS_cf"].abs().sort_values(ascending=False).index).head(n_examples)
+        ex = top.merge(texts[["id", "full_text", "text_cf"]], on="id", how="left")
+        print(f"\n[Largest sentiment shifts] (top {len(ex)})")
+        for _, row in ex.iterrows():
+            print(f"- S {row['S_orig']:+.2f} -> {row['S_cf']:+.2f} | {DIRECTION.get(row['gender_context'], row['gender_context'])}"
+                  f" | {row['ai_category']} | n_swaps={row['n_swaps']}")
+            for o, c in changed_sentences(str(row["full_text"]), str(row["text_cf"]))[:2]:
+                print(f"  ORIG: {o[:300]}")
+                print(f"  CF:   {c[:300]}")
+    return r
+
+
 # ---------------------------------------------------------------- run
 
 def main_2a():
@@ -208,6 +341,20 @@ def main_2a():
     results = analyze_2a(preds, texts)
 
     out_path = os.path.join(CF_DIR, "cf_2a_results.json")
+    with open(out_path, "w") as f:
+        json.dump(results, f, indent=2, default=float)
+    print(f"\nSaved to {out_path}")
+    return results
+
+
+def main_2b():
+    scores = pd.read_pickle(os.path.join(CF_DIR, "cf_sentiment_scores.pkl"))
+    texts = pd.read_pickle(os.path.join(CF_DIR, "counterfactual_posts_checked.pkl"))
+    vader_path = os.path.join(CF_DIR, "cf_vader_sanity.pkl")
+    vader = pd.read_pickle(vader_path) if os.path.exists(vader_path) else None
+    results = analyze_2b(scores, texts, vader)
+
+    out_path = os.path.join(CF_DIR, "cf_2b_results.json")
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2, default=float)
     print(f"\nSaved to {out_path}")
