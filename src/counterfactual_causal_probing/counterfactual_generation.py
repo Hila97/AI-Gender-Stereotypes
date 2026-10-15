@@ -56,13 +56,6 @@ direct_swaps = {
     "grandfather": "grandmother",
 
     # extended lexicon (not in the original gender lexicons)
-    # titles: Mr. -> Ms. (neutral form), Mrs./Ms. -> Mr.
-    "mr.": "ms.",
-    "mr": "ms",
-    "mrs.": "mr.",
-    "mrs": "mr",
-    "ms.": "mr.",
-    "ms": "mr",
     "sir": "madam",
     "madam": "sir",
     "ma'am": "sir",
@@ -111,6 +104,29 @@ direct_swaps = {
 }
 
 
+# titles are swapped only before a name ("Ms. Lee"), because "MS" is also
+# a degree (MS in data science) or Microsoft. Mr. -> Ms. (neutral form), Mrs./Ms./Miss -> Mr.
+title_swaps = {
+    "mr.": "ms.", "mr": "ms",
+    "mrs.": "mr.", "mrs": "mr",
+    "ms.": "mr.", "ms": "mr",
+    "miss": "mr",
+}
+
+# punctuation after "his" that means it stands alone ("the book is his.")
+# quotes and opening brackets are NOT here: in 'his "ideas"' it is still possessive
+END_PUNCT = {".", ",", ";", ":", "!", "?", ")", "]"}
+
+
+def match_case(new_word, token):
+    """Copy the case of the original word to the swapped word."""
+    if token.is_upper and len(token.text) > 1:
+        return new_word.upper()          # "GUYS" -> "GALS"
+    if token.text[0].isupper():
+        return new_word[0].upper() + new_word[1:]   # "She" -> "He"
+    return new_word
+
+
 def swap_gender_doc(doc):
     """Swap gender words in a spaCy doc. Returns (flipped_text, n_swaps)."""
     new_words = []
@@ -128,19 +144,24 @@ def swap_gender_doc(doc):
                 new_word = "him"  # "I saw her" -> "I saw him"
 
         elif word_lower == "his":
-            next_token_is_punct = False
+            next_token_is_end_punct = False
             if token.i + 1 < len(doc):
-                if doc[token.i + 1].is_punct:
-                    next_token_is_punct = True
+                if doc[token.i + 1].text in END_PUNCT:
+                    next_token_is_end_punct = True
 
-            if token.dep_ == "poss" and not next_token_is_punct:
+            if token.dep_ == "poss" and not next_token_is_end_punct:
                 new_word = "her"  # "his car" -> "her car"
             else:
                 new_word = "hers" # "the car is his," -> "the car is hers,"
 
-        # "Miss" as a title ("Miss Lee") vs. the verb ("I miss her")
-        elif word_lower == "miss":
-            new_word = "mr" if token.pos_ == "PROPN" else token.text
+        # titles: only before a name, and not "MS" in capitals (degree / Microsoft)
+        # also separates "Miss Lee" from the verb "I miss her"
+        elif word_lower in title_swaps:
+            next_is_name = token.i + 1 < len(doc) and doc[token.i + 1].pos_ == "PROPN"
+            if next_is_name and not token.is_upper:
+                new_word = title_swaps[word_lower]
+            else:
+                new_word = token.text
 
         # basic lexicon
         elif word_lower in direct_swaps:
@@ -149,11 +170,11 @@ def swap_gender_doc(doc):
         else:
             new_word = token.text
 
+        # case is changed ONLY for swapped words; every other word stays exactly as written
+        # (capitalize() on all words turned "Q&A" -> "Q&a", "U.S." -> "U.s.", "D&D" -> "D&d")
         if new_word.lower() != word_lower:
             n_swaps += 1
-
-        if token.is_title:
-            new_word = new_word.capitalize()
+            new_word = match_case(new_word, token)
 
         new_words.append(new_word)
 
@@ -169,7 +190,7 @@ def swap_gender(text):
 
 
 # regex for a fast pre-filter: does the text contain any gender word at all?
-_gender_words = set(k.rstrip(".") for k in direct_swaps) | {"her", "his", "miss"}
+_gender_words = set(k.rstrip(".") for k in list(direct_swaps) + list(title_swaps)) | {"her", "his"}
 GENDER_PATTERN = re.compile(
     r"\b(" + "|".join(sorted((re.escape(w) for w in _gender_words), key=len, reverse=True)) + r")\b",
     flags=re.IGNORECASE
@@ -217,13 +238,15 @@ def generate_counterfactuals(df, text_col="full_text", batch_size=256, n_process
 
 def main():
     BASE_DIR = "/content/gdrive/MyDrive/Data mining/text mining/data"
+    # deduplicated posts; train/val/test were split from this file
     INPUT_PATH = os.path.join(BASE_DIR, "processed/word2vec_posts.pkl")
     OUTPUT_DIR = os.path.join(BASE_DIR, "counterfactual")
     OUTPUT_PATH = os.path.join(OUTPUT_DIR, "counterfactual_posts.pkl")
 
     print(f"Loading original data from {INPUT_PATH} ...")
-    df = pd.read_csv(INPUT_PATH)
+    df = pd.read_pickle(INPUT_PATH)
     print(f"Loaded {len(df)} posts.")
+
     df_cf = generate_counterfactuals(df, text_col="full_text")
 
     # summary
@@ -243,5 +266,3 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_cf.to_pickle(OUTPUT_PATH)
     print(f"Saved {len(df_cf)} rows to {OUTPUT_PATH}")
-
-
