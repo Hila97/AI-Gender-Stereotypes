@@ -1,3 +1,6 @@
+import os
+import re
+import pandas as pd
 import spacy
 
 # load spacy
@@ -108,28 +111,28 @@ direct_swaps = {
 }
 
 
-def swap_gender(text):
-    #spacy split to tokens
-    doc = nlp(text)
+def swap_gender_doc(doc):
+    """Swap gender words in a spaCy doc. Returns (flipped_text, n_swaps)."""
     new_words = []
-    
+    n_swaps = 0
+
     for token in doc:
         word_lower = token.lower_
-        
+
         # edge cases
         if word_lower == "her":
             # PRP$ = Possessive Pronoun
             if token.tag_ == "PRP$" or token.dep_ == "poss":
                 new_word = "his"  # "her book" -> "his book"
-            else: 
+            else:
                 new_word = "him"  # "I saw her" -> "I saw him"
-                
+
         elif word_lower == "his":
             next_token_is_punct = False
-            if token.i + 1 < len(doc): 
+            if token.i + 1 < len(doc):
                 if doc[token.i + 1].is_punct:
                     next_token_is_punct = True
-            
+
             if token.dep_ == "poss" and not next_token_is_punct:
                 new_word = "her"  # "his car" -> "her car"
             else:
@@ -142,43 +145,103 @@ def swap_gender(text):
         # basic lexicon
         elif word_lower in direct_swaps:
             new_word = direct_swaps[word_lower]
-            
+
         else:
             new_word = token.text
-            
+
+        if new_word.lower() != word_lower:
+            n_swaps += 1
+
         if token.is_title:
             new_word = new_word.capitalize()
-            
+
         new_words.append(new_word)
-        
+
     # back to text
     flipped_text = "".join([new_words[i] + doc[i].whitespace_ for i in range(len(doc))])
-    
+
+    return flipped_text, n_swaps
+
+
+def swap_gender(text):
+    flipped_text, _ = swap_gender_doc(nlp(text))
     return flipped_text
 
+
+# regex for a fast pre-filter: does the text contain any gender word at all?
+_gender_words = set(k.rstrip(".") for k in direct_swaps) | {"her", "his", "miss"}
+GENDER_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted((re.escape(w) for w in _gender_words), key=len, reverse=True)) + r")\b",
+    flags=re.IGNORECASE
+)
+
+
+def has_gender_word(text):
+    return bool(GENDER_PATTERN.search(text))
+
+
+def generate_counterfactuals(df, text_col="full_text", batch_size=256, n_process=1):
+    """
+    Adds 'text_cf' (gender-swapped text) and 'n_swaps' (number of swapped words).
+    Keeps only rows where the swap actually changed the text.
+    """
+    df = df.copy()
+    df[text_col] = df[text_col].fillna("").astype(str)
+
+    # 1. keep only texts with at least one gender word
+    mask = df[text_col].apply(has_gender_word)
+    df = df[mask].copy()
+    print(f"Texts with at least one gender word: {len(df)} / {len(mask)} ({mask.mean():.1%})")
+
+    # 2. swap with nlp.pipe (much faster than nlp(text) in a loop)
+    flipped, swaps = [], []
+    texts = df[text_col].tolist()
+    for i, doc in enumerate(nlp.pipe(texts, batch_size=batch_size, n_process=n_process)):
+        t, n = swap_gender_doc(doc)
+        flipped.append(t)
+        swaps.append(n)
+        if (i + 1) % 5000 == 0:
+            print(f"  processed {i + 1}/{len(texts)}")
+
+    df["text_cf"] = flipped
+    df["n_swaps"] = swaps
+
+    # 3. drop rows where nothing changed (e.g. "his" matched by regex but text identical)
+    before = len(df)
+    df = df[(df["n_swaps"] > 0) & (df[text_col] != df["text_cf"])].copy()
+    print(f"Removed {before - len(df)} rows with no change after swapping.")
+    print(f"Final counterfactual pairs: {len(df)}")
+
+    return df
+
+
 def main():
+    BASE_DIR = "/content/gdrive/MyDrive/Data mining/text mining/data"
+    INPUT_PATH = os.path.join(BASE_DIR, "processed/word2vec_posts.pkl")
+    OUTPUT_DIR = os.path.join(BASE_DIR, "counterfactual")
+    OUTPUT_PATH = os.path.join(OUTPUT_DIR, "counterfactual_posts.pkl")
 
-  print("Starting counterfactual generation...")
-  test_sentences = [
-    # 1. בדיקת המילה her: פעם אחת כמושא ופעם שנייה כשייכות
-    "I saw her driving her new car with her mother.",
-    
-    # 2. בדיקת המילה his: פעם אחת כשייכות צמודה ופעם שנייה כשייכות עצמאית
-    "His uncle told the teacher that the missing book is his.",
-    
-    # 3. בדיקת המילים שחזרו למילון (him ו-hers)
-    "This bag is hers, so please give it back to her.",
-    
-    # 4. בדיקת מילים מהלקסיקון (משפחה, תארים) ושמירה על אות גדולה בתחילת משפט
-    "The gentle woman and her husband walked the girls to school.",
-    
-    # 5. משפט האולטימטיבי: הכל מהכל בבת אחת
-    "She told her brother that the car is his, but she still loves her car."
-  ]
+    print(f"Loading original data from {INPUT_PATH} ...")
+    df = pd.read_csv(INPUT_PATH)
+    print(f"Loaded {len(df)} posts.")
+    df_cf = generate_counterfactuals(df, text_col="full_text")
 
-  print("--- Starting Sanity Check ---\n")
+    # summary
+    print("\n--- n_swaps distribution ---")
+    print(df_cf["n_swaps"].describe())
+    if "gender_context" in df_cf.columns:
+        print("\n--- gender_context of swapped posts ---")
+        print(df_cf["gender_context"].value_counts())
 
-  for i, sentence in enumerate(test_sentences, 1):
-      print(f"Test {i}:")
-      print(f"Original: {sentence}")
-      print(f"Flipped:  {swap_gender(sentence)}\n")
+    print("\n--- 5 random examples ---")
+    for _, row in df_cf.sample(min(5, len(df_cf)), random_state=42).iterrows():
+        print(f"ORIGINAL: {row['full_text'][:300]}")
+        print(f"FLIPPED:  {row['text_cf'][:300]}")
+        print(f"n_swaps:  {row['n_swaps']}\n")
+
+    # save a NEW file, the original csv is not touched
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    df_cf.to_pickle(OUTPUT_PATH)
+    print(f"Saved {len(df_cf)} rows to {OUTPUT_PATH}")
+
+
