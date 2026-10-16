@@ -109,7 +109,7 @@ def plot_2b_hist(save=True):
         ax.set_ylabel("% of pairs")
         ax.text(0.99, 0.9, f"{name}\nn = {len(x):,}, ΔS = 0 in {np.mean(x == 0):.0%}",
                 transform=ax.transAxes, ha="right", va="top", fontsize=9, color="#2b2a27")
-    axes[1].set_xlabel("ΔS = sentiment(swapped) − sentiment(original)   (values beyond ±0.15 shown at the edge)")
+    axes[1].set_xlabel("ΔS = sentiment(swapped) − sentiment(original)\n(values beyond ±0.15 are shown in the edge bars)")
     axes[0].set_title("2b. VADER cannot see the swap; RoBERTa sees small changes")
     fig.tight_layout()
     _save(fig, "2b_hist_vader_vs_roberta.png", save)
@@ -144,7 +144,7 @@ def plot_2b_bars(save=True):
 
 # ---------------------------------------------------------------- 2c
 
-def plot_2c_arrows(n_arrows=120, seed=42, save=True):
+def plot_2c_arrows(n_arrows=40, seed=42, save=True):
     """
     The "map" view of 2c. x = position on the Soft -> Hard axis (0 = Soft centre, 1 = Hard centre),
     y = position on the female -> male direction (0 = female centre, 1 = male centre).
@@ -180,7 +180,7 @@ def plot_2c_arrows(n_arrows=120, seed=42, save=True):
         shown.append(sample)
         for i in sample:
             ax.annotate("", xy=(x_c[i], y_c[i]), xytext=(x_o[i], y_o[i]),
-                        arrowprops={"arrowstyle": "-|>", "color": COLOR[name], "lw": 0.6, "alpha": 0.35,
+                        arrowprops={"arrowstyle": "-|>", "color": COLOR[name], "lw": 0.7, "alpha": 0.3,
                                     "mutation_scale": 6})
         # mean move, drawn from the group's mean original position
         mx0, my0 = x_o[idx].mean(), y_o[idx].mean()
@@ -191,10 +191,10 @@ def plot_2c_arrows(n_arrows=120, seed=42, save=True):
         handles.append(Line2D([0], [0], color=COLOR[name], lw=3,
                               label=f"{name.replace('->', ' → ')}  (mean Δx = {np.mean(x_c[idx] - x_o[idx]):+.1%})"))
 
-    # arrows do not set the axis limits by themselves: use the central 96% of the drawn points
+    # arrows do not set the axis limits by themselves: use the central 90% of the drawn points
     shown = np.concatenate(shown)
     xs, ys = np.r_[x_o[shown], x_c[shown], 0, 1], np.r_[y_o[shown], y_c[shown], 0, 1]
-    (x0, x1), (y0, y1) = np.percentile(xs, [2, 98]), np.percentile(ys, [2, 98])
+    (x0, x1), (y0, y1) = np.percentile(xs, [5, 95]), np.percentile(ys, [5, 95])
     ax.set_xlim(min(x0, -0.1) - 0.1, max(x1, 1.1) + 0.1)
     ax.set_ylim(min(y0, -0.1) - 0.1, max(y1, 1.1) + 0.1)
 
@@ -272,7 +272,49 @@ def plot_summary_forest(save=True):
                 Line2D([0], [0], marker="o", ls="", markerfacecolor="white", color="#52514e",
                        label="not significant")]
     ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.35, -0.1), ncol=3, fontsize=8)
+    # significance comes from the Wilcoxon test (ranks), the CI from the mean: with skewed data a test
+    # can be significant even when the CI of d touches 0 (e.g. most posts move slightly one way)
+    fig.text(0.01, -0.04, "Significance: Wilcoxon signed-rank test (rank-based), Holm-corrected. "
+             "The CI of d is mean-based, so a significant test can have a CI that touches 0.",
+             fontsize=7.5, color="#52514e")
     _save(fig, "summary_forest_cohens_d.png", save)
+    return fig
+
+
+def plot_summary_simple(save=True):
+    """
+    Simple version of the summary, for readers who do not know forest plots:
+    one bar per main question, bar length = strength of the gender effect (|Cohen's d|),
+    on a background that shows what counts as negligible / small / medium / large.
+    """
+    res = _load_json("direction2_results.json")
+    tests = {t["test"]: t for t in res["tests"]}
+    rows = [  # (experiment, plain-language label, test name in direction2_results.json)
+        ("2a", "Classifier: P(Hard) changes\nwhen a post becomes more male", "masculinization dP"),
+        ("2b", "Sentiment changes\nwhen a post becomes more female", "feminization dS, all"),
+        ("2b", "Emotions change more\nthan with a control word", "GoEmotions total change gender - control, same n"),
+        ("2c", "Embedding moves farther\nthan with a control word (H2c)", "H2c: delta gender - control, same n"),
+        ("2c", "Embedding moves towards Hard AI\nwhen a post becomes more male", "masculinization axis shift (balanced axis)"),
+    ]
+    rows = [(e, lab, tests[k]) for e, lab, k in rows if k in tests][::-1]   # first row at the top
+
+    fig, ax = plt.subplots(figsize=(7.6, 0.75 * len(rows) + 1.3))
+    bands = [(0, 0.2, "negligible", "#f1f0ec"), (0.2, 0.5, "small", "#e4e3de"),
+             (0.5, 0.8, "medium", "#d6d5cf"), (0.8, 1.2, "large", "#c8c7c0")]
+    for lo, hi, name, color in bands:
+        ax.axvspan(lo, hi, color=color, zorder=0, lw=0)
+        ax.text((lo + hi) / 2, len(rows) - 0.35, name, ha="center", va="bottom", fontsize=8.5, color="#52514e")
+    for i, (e, lab, t) in enumerate(rows):
+        d = abs(t["d"])
+        ax.barh(i, d, height=0.5, color=EXP_COLOR[e], zorder=2)
+        ax.text(d + 0.015, i, f"{d:.2f}", va="center", fontsize=9, color="#2b2a27", zorder=3)
+    ax.set_yticks(range(len(rows)), [f"{e}  {lab}" for e, lab, _ in rows], fontsize=9)
+    ax.set_xlim(0, 1.2)
+    ax.set_ylim(-0.6, len(rows) - 0.1)
+    ax.set_xlabel("Strength of the gender effect  (|Cohen's d|)")
+    ax.set_title("Only the embedding direction shows a real gender effect", pad=22)
+    ax.grid(False)
+    _save(fig, "summary_simple_bars.png", save)
     return fig
 
 
@@ -281,7 +323,8 @@ def plot_summary_forest(save=True):
 def main(save=True):
     figs = {}
     for name, fn in [("2a_scatter", plot_2a_scatter), ("2b_hist", plot_2b_hist), ("2b_bars", plot_2b_bars),
-                     ("2c_arrows", plot_2c_arrows), ("2c_bars", plot_2c_bars), ("summary_forest", plot_summary_forest)]:
+                     ("2c_arrows", plot_2c_arrows), ("2c_bars", plot_2c_bars), ("summary_forest", plot_summary_forest),
+                     ("summary_simple", plot_summary_simple)]:
         print(f"\n--- {name}")
         figs[name] = fn(save=save)
         plt.show()
