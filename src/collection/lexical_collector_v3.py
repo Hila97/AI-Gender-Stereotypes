@@ -15,6 +15,7 @@ import re
 from collections import defaultdict
 
 from empath import Empath
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 POSITIVE = [
     "achievement_excellence", "cognitive_insight", "positive_emotions", "certainty_confidence",
@@ -148,11 +149,14 @@ BARBARA_AI_TERMS = {"fine-tuning", "intelligence", "learning", "optimization",
 # ---------------------------------------------------------
 # Source mappings
 # ---------------------------------------------------------
-# NRC: only emotion columns add words. The general 'positive' / 'negative' columns are used
-# only as a valence filter in step 5. 'anticipation' and 'surprise' are not used at all:
+# NRC: only emotion columns add words, and only if NRC's general 'positive' / 'negative' column
+# agrees with the lexicon's valence. Those two columns are also the valence filter in step 5. 'anticipation' and 'surprise' are not used at all:
 # they have no valence (in v2 they brought words like 'death' and 'accident' into positive_emotions).
+# 'trust' is not used either: the word 'trust' itself is removed as a soft_ai word (rule 3), and the
+# column adds many words with no emotion. The words it would add are saved in
+# report_nrc_trust_excluded.csv, to check this decision.
 NRC_ADD = {
-    "positive_emotions": {"joy", "trust"},
+    "positive_emotions": {"joy"},
     "negative_emotions": {"anger", "fear", "sadness", "disgust"},
 }
 
@@ -178,6 +182,13 @@ GI_ADD = {
 }
 
 WORD_RE = re.compile(r"^[a-z][a-z'-]*$")   # single words only; the labeler matches single tokens
+
+# Function words Empath returns next to real words ("yet", "though", "truly"...): not affect, so not added
+STOP_WORDS = ENGLISH_STOP_WORDS | {
+    "actually", "although", "certainly", "honestly", "however", "ultimately", "truly", "really",
+    "regardless", "necessarily", "inevitably", "nevertheless", "moreover", "perhaps", "therefore",
+    "thus", "though", "yet", "like", "much", "wholly", "reasonably", "surely", "own", "others",
+}
 
 
 def _add(lexicons, sources, category, word, source):
@@ -211,10 +222,12 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
     lexicon_generator = Empath()
     for cat in lexicons:
         try:
-            new_words = lexicon_generator.create_category(cat, sorted(SEEDS[cat]), size=empath_size)
+            # create_category() returns None: it only prints the words and keeps them in .cats[name]
+            lexicon_generator.create_category(cat, sorted(SEEDS[cat]), size=empath_size)
             before = len(lexicons[cat])
-            for w in new_words or []:
-                _add(lexicons, sources, cat, w, "empath")
+            for w in lexicon_generator.cats.get(cat, []):
+                if w.lower() not in STOP_WORDS:
+                    _add(lexicons, sources, cat, w, "empath")
             print(f"   > '{cat}': +{len(lexicons[cat]) - before} words from Empath")
         except Exception as e:
             print(f"   > Warning: Empath expansion failed for {cat}: {e}")
@@ -224,7 +237,9 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
     # ---------------------------------------------------------
     print("--- Step 3: Processing NRC Lexicon ---")
     nrc_valence = {"positive": set(), "negative": set()}
+    nrc_trust_excluded = set()   # words NRC 'trust' would have added to positive_emotions (for the report)
     if os.path.exists(nrc_path):
+        nrc_emotions = []   # (word, emotion); added after the whole file is read, so the valence is known
         with open(nrc_path, "r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip() or line.startswith("#"):
@@ -235,9 +250,16 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
                 word, emotion = parts[0].lower(), parts[1]
                 if emotion in nrc_valence:
                     nrc_valence[emotion].add(word)
-                for cat, emotions in NRC_ADD.items():
-                    if emotion in emotions:
-                        _add(lexicons, sources, cat, word, "nrc")
+                nrc_emotions.append((word, emotion))
+        # like GI: an emotion word is added only if NRC also marks it with the lexicon's valence
+        # (e.g. 'ambulance' is fear + trust but neither positive nor negative -> not added)
+        for word, emotion in nrc_emotions:
+            for cat, emotions in NRC_ADD.items():
+                valence = "positive" if cat in POSITIVE else "negative"
+                if emotion in emotions and word in nrc_valence[valence]:
+                    _add(lexicons, sources, cat, word, "nrc")
+            if emotion == "trust" and word in nrc_valence["positive"] and WORD_RE.match(word):
+                nrc_trust_excluded.add(word)
         for cat in NRC_ADD:
             n = sum("nrc" in s for s in sources[cat].values())
             print(f"   > '{cat}': {n} words from NRC")
@@ -319,6 +341,15 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
             if rule:
                 lexicons[cat].discard(w)
                 removed.append((cat, w, rule))
+    # rule 4: a word that is still in both a positive and a negative lexicon probably carries no
+    # emotion (e.g. 'leadership', 'necessity' from Empath). It leaves every lexicon where it is not a seed.
+    in_pos = set().union(*(lexicons[c] for c in POSITIVE))
+    in_neg = set().union(*(lexicons[c] for c in NEGATIVE))
+    for w in sorted(in_pos & in_neg):
+        for cat in lexicons:
+            if w in lexicons[cat] and "seed" not in sources[cat][w]:
+                lexicons[cat].discard(w)
+                removed.append((cat, w, "4_in_positive_and_negative"))
     for cat in lexicons:
         r = defaultdict(int)
         for c, _, rule in removed:
@@ -349,6 +380,20 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
         writer.writerow(["lexicon", "word", "rule", "sources"])
         for cat, w, rule in removed:
             writer.writerow([cat, w, rule, "+".join(sorted(sources[cat][w]))])
+
+    # Words NRC 'trust' would have added: is the decision to leave it out a good one?
+    # in_v3_anyway = the word still got into some lexicon from another source.
+    in_any = set().union(*lexicons.values())
+    with open(os.path.join(output_dir, "report_nrc_trust_excluded.csv"), "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["word", "in_v3_anyway"])
+        for w in sorted(nrc_trust_excluded):
+            writer.writerow([w, w in in_any])
+    trust_only = sorted(nrc_trust_excluded - in_any)
+    print(f"\n--- NRC 'trust' (not used): {len(nrc_trust_excluded)} words, "
+          f"{len(trust_only)} of them are in no v3 lexicon ---")
+    step = max(1, len(trust_only) // 40)
+    print("   sample of words we lost: " + ", ".join(trust_only[::step][:40]))
 
     print("\n--- Overlap check: positive vs negative lexicons (should be empty) ---")
     clash = False
