@@ -148,6 +148,8 @@ EXPERT_POSITIVE_IN_NEGATIVE_FILES = {"validity", "verification", "volunteer"}  #
 MANUAL_REMOVE = {
     "like": None,
     "sorry": ["physical_adversity"],
+    "black": None,   # colour / race words, not affect
+    "white": None,  # colour / race words, not affect
 }
 
 EXPERT_AI_TERMS = {"fine-tuning", "intelligence", "learning", "optimization",
