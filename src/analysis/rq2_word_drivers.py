@@ -38,7 +38,9 @@ def count_words(texts, lexicon):
     for text in texts:
         words = tokenize(text)
         total += len(words)
-        counts.update(w for w in words if w in lexicon)
+        # same rule as the labeler: 'kind of' / 'sort of' are not counted
+        counts.update(w for i, w in enumerate(words) if w in lexicon and
+                      not (w in ("kind", "sort") and i + 1 < len(words) and words[i + 1] == "of"))
     return total, counts
 
 
