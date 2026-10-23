@@ -1,10 +1,10 @@
 """
-    Build the v3 affective lexicons (after Barbara's review):
-    1. Seed words (Barbara's combined lists + the positive words she picked from each v2 file)
+    Build the v3 affective lexicons (after the linguist's review):
+    1. Seed words (the linguist's combined lists + the positive words she picked from each v2 file)
     2. Empath (Expansion)
     3. NRC (emotion columns only)
     4. Harvard General Inquirer (a word is added only if GI also marks it Positiv / Negativ)
-    5. Cleaning (valence filter, Barbara's flagged words, gender and AI words)
+    5. Cleaning (valence filter, the linguist's flagged words, gender and AI words)
     6. Saving + report
 
     The v2 lexicons (lexical_collector.py, data/lexicons) are not changed.
@@ -29,7 +29,7 @@ NEGATIVE = [
 # ---------------------------------------------------------
 # 1. Seed words
 # ---------------------------------------------------------
-# Barbara's combined positive list ("One positive seeds list from all the files")
+# The linguist's combined positive list ("One positive seeds list from all the files")
 SEEDS = {
     "achievement_excellence": {"success", "achievement", "triumph", "attain", "excel", "goal", "victory", "better"},
     "cognitive_insight": {"wisdom", "insight", "understand", "clear", "reason", "logic", "think", "know"},
@@ -41,7 +41,7 @@ SEEDS = {
     "reward_success": {"prize", "benefit", "award", "gain", "reward", "earn", "expect", "value"},
 }
 
-# Barbara's positive words from each v2 file, added to the matching v3 category
+# The linguist's positive words from each v2 file, added to the matching v3 category
 SEEDS_FROM_V2_FILES = {
     "affiliation_support": {"acceptance", "admire", "affection", "amiable", "brotherhood", "cooperation",
                             "friendship", "harmony", "sincere", "sympathetic"},            # affiliation_social.txt
@@ -59,7 +59,7 @@ SEEDS_FROM_V2_FILES = {
 for _cat, _words in SEEDS_FROM_V2_FILES.items():
     SEEDS[_cat] |= _words
 
-# Barbara's combined negative list: 5 themes, each theme = all of its sub-groups
+# The linguist's combined negative list: 5 themes, each theme = all of its sub-groups
 SEEDS.update({
     "physical_adversity": {
         # Disasters & Hazards
@@ -113,10 +113,10 @@ SEEDS.update({
                           "anger", "disgust", "anxiety"},
 })
 
-# Words Barbara found in the v2 files with the OPPOSITE valence ("Negative seeds lists from each
+# Words the linguist found in the v2 files with the OPPOSITE valence ("Negative seeds lists from each
 # of the files separately", and the contrast seeds from negative_emotions.txt).
 # Removed in step 5 (rule 2); they are examples of the noise the expansion added.
-BARBARA_NEGATIVE_IN_POSITIVE_FILES = {
+EXPERT_NEGATIVE_IN_POSITIVE_FILES = {
     # affiliation_social.txt
     "alienate", "argument", "boycott", "controversy", "disagreement", "dispute", "excommunication", "exile",
     "expel", "ridicule", "shun", "threat", "traitor",
@@ -139,10 +139,18 @@ BARBARA_NEGATIVE_IN_POSITIVE_FILES = {
     "defeat", "demolish", "denounce", "depose", "deprive", "dictate", "dictatorial", "dominate", "enslave",
     "eradicate", "evict", "exterminate", "force", "imprison", "usurp", "veto",
 }
-BARBARA_POSITIVE_IN_NEGATIVE_FILES = {"validity", "verification", "volunteer"}  # from negative_emotions.txt
+EXPERT_POSITIVE_IN_NEGATIVE_FILES = {"validity", "verification", "volunteer"}  # from negative_emotions.txt
 
-# AI terms Barbara marked in hard_ai.txt as carrying valence (removed with the AI lexicons, rule 3)
-BARBARA_AI_TERMS = {"fine-tuning", "intelligence", "learning", "optimization",
+# AI terms the linguist marked in hard_ai.txt as carrying valence (removed with the AI lexicons, rule 3)
+# Removed after the RQ2 word-driver check (rule 5). None = every lexicon.
+# 'like' is mostly not an emotion ("looks like", "it's like") and is not in the linguist's lists;
+# 'sorry' stays in negative_emotions ("sorry for your loss") but is not physical adversity.
+MANUAL_REMOVE = {
+    "like": None,
+    "sorry": ["physical_adversity"],
+}
+
+EXPERT_AI_TERMS = {"fine-tuning", "intelligence", "learning", "optimization",
                     "bias", "dropout", "overfitting", "latency", "pruning"}
 
 
@@ -318,7 +326,7 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
             gender_ai |= load_word_file(path)
         else:
             print(f"   > Warning: {path} not found - its words are not removed")
-    gender_ai |= BARBARA_AI_TERMS
+    gender_ai |= EXPERT_AI_TERMS
 
     removed = []   # (category, word, rule)
     for cat in lexicons:
@@ -329,11 +337,11 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
             # rule 3 first: gender / AI words leave every lexicon, seeds included
             if w in gender_ai:
                 rule = "3_gender_or_ai_word"
-            # rules 1-2 never remove Barbara's seeds (she chose them by hand)
-            elif not is_seed and positive and w in BARBARA_NEGATIVE_IN_POSITIVE_FILES:
-                rule = "2_barbara_flagged"
-            elif not is_seed and not positive and w in BARBARA_POSITIVE_IN_NEGATIVE_FILES:
-                rule = "2_barbara_flagged"
+            # rules 1-2 never remove the linguist's seeds (she chose them by hand)
+            elif not is_seed and positive and w in EXPERT_NEGATIVE_IN_POSITIVE_FILES:
+                rule = "2_expert_flagged"
+            elif not is_seed and not positive and w in EXPERT_POSITIVE_IN_NEGATIVE_FILES:
+                rule = "2_expert_flagged"
             elif not is_seed and positive and w in neg_marked:
                 rule = "1_opposite_valence"
             elif not is_seed and not positive and w in pos_marked:
@@ -350,6 +358,12 @@ def build_lexicons(nrc_path, gi_path, old_lexicons_dir, output_dir, empath_size=
             if w in lexicons[cat] and "seed" not in sources[cat][w]:
                 lexicons[cat].discard(w)
                 removed.append((cat, w, "4_in_positive_and_negative"))
+    # rule 5: words removed after reading the RQ2 word-driver check (see MANUAL_REMOVE)
+    for w, cats in MANUAL_REMOVE.items():
+        for cat in (cats or lexicons):
+            if w in lexicons[cat]:
+                lexicons[cat].discard(w)
+                removed.append((cat, w, "5_manual_review"))
     for cat in lexicons:
         r = defaultdict(int)
         for c, _, rule in removed:

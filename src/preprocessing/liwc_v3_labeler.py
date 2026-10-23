@@ -1,5 +1,5 @@
 """
-LIWC v3 Labeler (Barbara's affective lexicons)
+LIWC v3 Labeler (affect lexicons)
 ----------------------------------------------
 1. Reads the existing final datasets (created by algorithmic_labeler.py).
 2. Adds one LIWCV3_<lexicon> column per v3 lexicon (same scoring as stage 1: % of words in the lexicon).
@@ -27,6 +27,9 @@ LIWC_V3_CATEGORIES = [
 ]
 
 
+NOT_BEFORE_OF = {"kind", "sort"}
+
+
 def load_v3_lexicons() -> Dict[str, Set[str]]:
     """Loads the v3 lexicon files into a dictionary of sets."""
     print(f"Loading v3 lexicons from: {LEXICONS_V3_DIR}")
@@ -52,6 +55,10 @@ def get_liwc_v3_scores(text: str, lexicons: Dict[str, Set[str]]) -> Dict[str, fl
     total_words = len(words)
     if total_words == 0:
         return {f"LIWCV3_{cat}": 0.0 for cat in lexicons}
+
+    # "kind of" / "sort of" are not emotion: drop 'kind' and 'sort' when 'of' comes right after them
+    words = [w for i, w in enumerate(words)
+             if not (w in NOT_BEFORE_OF and i + 1 < len(words) and words[i + 1] == "of")]
 
     scores = {}
     for category, lexicon_words in lexicons.items():
@@ -103,7 +110,7 @@ def process_v3_labeling():
 
 def main():
     print("=" * 60)
-    print("LIWC v3 LABELING (Barbara's affective lexicons)")
+    print("LIWC v3 LABELING (affect lexicons)")
     print("=" * 60)
     return process_v3_labeling()
 
