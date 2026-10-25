@@ -73,7 +73,7 @@ def word_drivers(df, lexicon_name, female_group="female_hard_ai", male_group="ma
     return words
 
 
-def plot_word_drivers(words, lexicon_name, top_n=15):
+def plot_word_drivers(words, lexicon_name, top_n=15, topic="hard"):
     """Bar chart: words pushing toward Female posts (right, pink) and Male posts (left, blue)."""
     top = pd.concat([words[words["gap"] > 0].head(top_n), words[words["gap"] < 0].tail(top_n)])
     top = top.sort_values("gap")
@@ -81,11 +81,12 @@ def plot_word_drivers(words, lexicon_name, top_n=15):
     plt.figure(figsize=(8, max(6, len(top) * 0.3)))
     plt.barh(top["word"], top["gap"], color=colors)
     plt.axvline(0, color='black', linewidth=0.8)
-    plt.title(f"{lexicon_name}: which words create the gap (Hard AI)", fontweight='bold')
+    plt.title(f"{lexicon_name}: which words create the gap ({topic.capitalize()} AI)", fontweight='bold')
     plt.xlabel("Gap in uses per 1,000 words  (> 0 = more in comments on Female posts)")
     plt.grid(axis='x', alpha=0.3)
     plt.tight_layout()
-    save_path = os.path.join(RESULTS_DIR, f"RQ2_LIWCV3_words_{lexicon_name}.png")
+    suffix = "" if topic == "hard" else f"_{topic}"     # Hard AI keeps the original file names
+    save_path = os.path.join(RESULTS_DIR, f"RQ2_LIWCV3_words_{lexicon_name}{suffix}.png")
     plt.savefig(save_path, bbox_inches='tight', dpi=300)
     print(f"Saved chart to: {save_path}")
     plt.show()
@@ -104,18 +105,20 @@ def sample_comments(df, lexicon_name, words, group="female_hard_ai", n=5, seed=4
         print()
 
 
-def main(lexicons=DEFAULT_LEXICONS, top_n=15):
+def main(lexicons=DEFAULT_LEXICONS, top_n=15, topic="hard"):
+    """topic: "hard" (default, as before) or "soft"."""
+    female_group, male_group = f"female_{topic}_ai", f"male_{topic}_ai"
     print("Loading comments dataset (v3)...")
     df = pd.read_csv(DATA_PATH, usecols=['body', 'post_id', 'parent_research_group'])
     df = df.drop_duplicates(subset=['body', 'post_id'])     # same as sentiment_analysis.py
-    df = df[df['parent_research_group'].isin(['female_hard_ai', 'male_hard_ai'])]
+    df = df[df['parent_research_group'].isin([female_group, male_group])]
 
     all_words = {}
     for lexicon_name in lexicons:
-        words = word_drivers(df, lexicon_name, top_n=top_n)
-        plot_word_drivers(words, lexicon_name, top_n=top_n)
+        words = word_drivers(df, lexicon_name, female_group, male_group, top_n=top_n)
+        plot_word_drivers(words, lexicon_name, top_n=top_n, topic=topic)
         # read comments with the 3 words that push most toward Female posts
-        sample_comments(df, lexicon_name, words.head(3)["word"])
+        sample_comments(df, lexicon_name, words.head(3)["word"], group=female_group)
         all_words[lexicon_name] = words
     return all_words
 
