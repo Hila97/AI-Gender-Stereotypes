@@ -174,7 +174,7 @@ def main():
     print(f"\nSaved topic_gfi.csv, post_gfi.pkl and gfi_lexicon_robustness.csv to {OUT_DIR}")
 
     print(f"\nOverall mean post GFI (topics only): {df.loc[df['topic'] != -1, 'gfi'].mean():.3f}")
-    show = ["size", "GFI", "gendered_share", "GFI_gendered_only", "top_words"]
+    show = ["size", "GFI", "gendered_share", "GFI_gendered_only"] + (["name"] if "name" in main_tab else ["top_words"])
     with pd.option_context("display.max_colwidth", 70, "display.width", 250):
         print(f"\n{TOP_K} most MALE-framed topics:")
         print(main_tab.head(TOP_K)[show].round(3).to_string())
