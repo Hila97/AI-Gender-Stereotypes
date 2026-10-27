@@ -1,27 +1,53 @@
-# Reddit API
-praw>=7.7.0
+# Gender Stereotypes in AI Discourse on Reddit
+# Tested on Google Colab (Python 3, GPU runtime).
+# Install: pip install -r requirements.txt
+# Extra one-time downloads are listed at the bottom of this file.
 
-# Data Processing
+# --- Data collection (Reddit API) ---
+praw>=7.7.0
+python-dotenv>=1.0.0
+empath>=0.89                  # seed-word expansion for the LIWC-style and affect lexicons
+
+# --- Data processing ---
 pandas>=2.0.0
 numpy>=1.24.0
+tqdm>=4.65.0
+joblib>=1.2.0
+six>=1.16.0
 
-# Statistical Analysis
+# --- Statistics ---
 scipy>=1.10.0
-statsmodels>=0.14.0
+statsmodels>=0.14.0           # RQ2 regression with post-clustered standard errors
+scikit-posthocs>=0.17.1       # Dunn post-hoc test (topic discovery)
 
-# Sentiment Analysis
+# --- NLP ---
 vaderSentiment>=3.3.2
-
-# NLP & Embeddings
-gensim>=4.3.0
 nltk>=3.8.0
 spacy>=3.5.0
+language-tool-python>=2.7.1   # grammar check of the counterfactual pairs (needs Java)
 
-# Machine Learning & Visualization
+# --- Embeddings, topic modeling and transformers ---
+gensim>=4.3.0                 # Word2Vec and WEAT
+torch>=2.0.0
+transformers>=4.30.0          # BERT classifiers, RoBERTa sentiment, BERT embeddings
+accelerate>=0.20.0            # required by the transformers Trainer
+datasets>=2.12.0
+sentence-transformers>=2.2.0  # all-MiniLM-L6-v2 and all-mpnet-base-v2 post embeddings
+bertopic>=0.16.0
+umap-learn>=0.5.3
+hdbscan>=0.8.29
+
+# --- Machine learning ---
 scikit-learn>=1.2.0
+
+# --- Visualization ---
 matplotlib>=3.7.0
 seaborn>=0.12.0
+wordcloud>=1.9.0
+adjustText>=1.0.0
+plotly>=5.15.0                # Sankey diagram (topic discovery)
+kaleido==0.2.1                # PNG export of plotly figures; newer versions need Chrome
 
-# Utilities
-tqdm>=4.65.0
-python-dotenv>=1.0.0
+# --- One-time downloads (run once after install) ---
+# python -m spacy download en_core_web_sm
+# python -c "import nltk; [nltk.download(p) for p in ['punkt', 'punkt_tab', 'stopwords', 'wordnet', 'omw-1.4']]"
