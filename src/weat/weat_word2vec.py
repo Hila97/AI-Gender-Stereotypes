@@ -203,6 +203,89 @@ def save(fig, name):
     plt.show()
 
 
+def load_lexicon(name):
+    with open(os.path.join(BASE_DIR, "data/lexicons", name), encoding="utf-8") as f:
+        return [line.strip().lower() for line in f if line.strip()]
+
+
+def full_lexicon_check(wv=None):
+    """Robustness of test 1: WEAT on the full Hard/Soft lexicons of the first stage instead of the 10 + 10 plan words.
+    Single words found in the model only (as in the first stage); words in both lexicons (bias, biases) left out.
+    Run with two gender lists: the 7 + 7 WEAT words, and the full gender lexicons of the first stage."""
+    wv = wv if wv is not None else load_model()
+    hard, soft = load_lexicon("hard_ai.txt"), load_lexicon("soft_ai.txt")
+    both = set(hard) & set(soft)
+    hard = [w for w in hard if w in wv and w not in both]
+    soft = [w for w in soft if w in wv and w not in both]
+    X = np.array([unit(wv[w]) for w in hard])
+    Y = np.array([unit(wv[w]) for w in soft])
+    genders = {"7 + 7 WEAT gender words": (MALE, FEMALE),
+               "full gender lexicons": ([w for w in load_lexicon("gender_male.txt") if w in wv],
+                                        [w for w in load_lexicon("gender_female.txt") if w in wv])}
+    rows = []
+    for name, (male, female) in genders.items():
+        A = np.array([unit(wv[w]) for w in male])
+        B = np.array([unit(wv[w]) for w in female])
+        r = weat(X, Y, A, B)
+        _, sub = robustness(X, Y, A, B)
+        rows.append({"gender words": name, "n_male": len(A), "n_female": len(B), "n_hard": len(X), "n_soft": len(Y),
+                     "d": r["d"], "p": r["p"], "sd_weat_d_2.5%": np.percentile(sub, 2.5),
+                     "sd_weat_d_97.5%": np.percentile(sub, 97.5), "share_subsets_d_above_0": (sub > 0).mean()})
+    res = pd.DataFrame(rows).set_index("gender words")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    res.to_csv(os.path.join(OUT_DIR, "weat_full_lexicon.csv"))
+    print(f"Hard AI words: {len(hard)} | Soft AI words: {len(soft)} | left out (in both lexicons): {sorted(both)}")
+    print(f"\n--- Test 1 on the full lexicons ({N_PERM:,} permutations, {N_SUB:,} random subsets) ---")
+    print(res.T.round(3).to_string())
+    return res
+
+
+# competence / warmth lexicons of the RQ2 extension (rq2_affect/rq2_affect_lexicons.py: SEEDS_ALL without
+# TECHNICAL_OR_FILLER, as in its main run); "brotherhood" left out because it contains a gender word
+RQ2_COMPETENCE = ["success", "achievement", "triumph", "attain", "ability", "accomplish", "advantage", "champion",
+                  "excellence", "prize", "award", "earn", "benefit", "wisdom", "insight", "ascertain", "brainy",
+                  "comprehend", "genius", "rational", "resourceful", "confidence", "assurance", "definite", "surely",
+                  "assure", "confident", "sturdy", "supreme", "trustworthy", "unwavering", "validation"]
+RQ2_WARMTH = ["friend", "ally", "acceptance", "affection", "amiable", "cooperation", "friendship", "harmony",
+              "sincere", "sympathetic", "supportive"]
+
+
+def rq2_lexicon_check(wv=None):
+    """Robustness of test 3: competence vs warmth with the RQ2-extension lexicons, alone and together with the plan
+    words; each with the 7 + 7 WEAT gender words and with the full gender lexicons."""
+    wv = wv if wv is not None else load_model()
+    t = TESTS["3 Competence vs Warmth"]
+    found = lambda words: [w for w in words if w in wv]
+    missing = [w for w in RQ2_COMPETENCE + RQ2_WARMTH if w not in wv]
+    rq2_x, rq2_y = found(RQ2_COMPETENCE), found(RQ2_WARMTH)
+    word_sets = {"RQ2 lexicons": (rq2_x, rq2_y),
+                 "plan words + RQ2 lexicons": (list(dict.fromkeys(t["X"] + rq2_x)),
+                                               list(dict.fromkeys(t["Y"] + rq2_y)))}
+    genders = {"7 + 7 WEAT gender words": (MALE, FEMALE),
+               "full gender lexicons": (found(load_lexicon("gender_male.txt")),
+                                        found(load_lexicon("gender_female.txt")))}
+    rows = []
+    for ws, (xw, yw) in word_sets.items():
+        X = np.array([vector(wv, w) for w in xw])
+        Y = np.array([vector(wv, w) for w in yw])
+        for gs, (male, female) in genders.items():
+            A = np.array([unit(wv[w]) for w in male])
+            B = np.array([unit(wv[w]) for w in female])
+            r = weat(X, Y, A, B)
+            _, sub = robustness(X, Y, A, B)
+            rows.append({"words": ws, "gender words": gs, "n_competence": len(X), "n_warmth": len(Y),
+                         "d": r["d"], "p": r["p"], "sd_weat_d_2.5%": np.percentile(sub, 2.5),
+                         "sd_weat_d_97.5%": np.percentile(sub, 97.5), "share_subsets_d_above_0": (sub > 0).mean()})
+    res = pd.DataFrame(rows).set_index(["words", "gender words"])
+    os.makedirs(OUT_DIR, exist_ok=True)
+    res.to_csv(os.path.join(OUT_DIR, "weat_test3_rq2_lexicons.csv"))
+    print(f"RQ2 competence words in the model: {len(rq2_x)} of {len(RQ2_COMPETENCE)} | "
+          f"warmth words: {len(rq2_y)} of {len(RQ2_WARMTH)} | missing: {missing}")
+    print(f"\n--- Test 3 with the RQ2 lexicons ({N_PERM:,} permutations, {N_SUB:,} random subsets) ---")
+    print(res.T.round(3).to_string())
+    return res
+
+
 def main(draw_graphs=True, wv=None):
     print("=" * 60)
     print("DIRECTION 3 - WEAT on the existing Word2Vec model")
