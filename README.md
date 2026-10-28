@@ -210,4 +210,4 @@ AI-Gender-Stereotypes/
 
 Hila Pinker
 
-M.Sc. final project, 2026. Supervised by Dr. [First Last], Department of Computer Science, Jerusalem College of Technology.
+M.Sc. final project, 2026. Supervised by Dr. Chaya Liebeskind, Department of Computer Science, Jerusalem College of Technology.
