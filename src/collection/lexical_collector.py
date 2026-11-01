@@ -1,4 +1,5 @@
 """
+    First-stage version, replaced by lexical_collector_v3.py
     Build lexicons using:
     1. Seed words (Lecturer's list - Always included)
     2. Empath (Expansion)
