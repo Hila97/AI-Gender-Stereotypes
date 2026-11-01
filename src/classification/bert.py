@@ -1,3 +1,4 @@
+"""Baseline transformer classifier: fine-tunes DistilBERT (distilbert-base-uncased, max 128 tokens). Compared with bert_large.py."""
 import pandas as pd
 import numpy as np
 import torch
