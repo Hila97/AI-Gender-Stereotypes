@@ -52,7 +52,7 @@ A question on women's self-talk (LIWC) was part of the original plan and was dro
 
 ## Data
 
-Posts and comments were collected with the Reddit API from 33 subreddits. Posts were found by searching for the gender words; comments were collected for the 500 most-commented posts.
+Posts and comments were collected with the Reddit API from 33 subreddits. Posts were found by searching for the gender words; comments were collected for 953 highly commented posts.
 
 | Category | Subreddits |
 |---|---|
@@ -173,7 +173,7 @@ With tens of thousands of texts almost every test is significant, so effect size
 
 - Gender context is inferred from word counts. It describes the discourse, not the author.
 - Posts were collected by searching for gender words, so only differences between groups or topics can be interpreted, not absolute levels.
-- Comment-level results rest on a small number of threads (comments were collected for the 500 most-commented posts).
+- Comment-level results rest on a small number of threads (comments were collected for the 953 highly commented posts).
 - RQ3: a control swap exists for 45.4% of the posts, so gender vs control comparisons use that subset. First names are not swapped, so some gender cues remain. LanguageTool checks grammar, not whether the swapped text is coherent.
 - Topic names and the Hard/Soft grouping of the topics were drafted with an AI tool and reviewed manually.
 - Future work: SEAT and DC-SEAT on contextual models, the embedding test (H3c) on the fine-tuned classifier itself, so that representation and decision are measured in the same model, and linking the counterfactual results to the topics.
