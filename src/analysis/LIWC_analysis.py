@@ -1,3 +1,7 @@
+"""
+    original RQ3, not included in the final project.
+    LIWC analysis for RQ2 on the comments presented at liwc_v3_analysis.py
+"""
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
